@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sandbox — {{ domain }}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header>
+    <h1>&#9881; Sandbox Control Plane</h1>
+    <span class="domain">{{ domain }}</span>
+  </header>
+
+  <main>
+    <!-- ── Sandbox Containers ── -->
+    <section id="containers-section">
+      <div class="section-header">
+        <h2>Docker Sandbox Containers</h2>
+        <div class="btn-group">
+          <button class="btn btn-green" onclick="sandboxUp()">Start All</button>
+          <button class="btn btn-red" onclick="sandboxDown()">Stop All</button>
+        </div>
+      </div>
+      <div id="containers" class="card-grid">
+        <div class="loading">Loading containers...</div>
+      </div>
+    </section>
+
+    <!-- ── Networks ── -->
+    <section id="networks-section">
+      <h2>Docker Networks</h2>
+      <div id="networks" class="card-grid">
+        <div class="loading">Loading networks...</div>
+      </div>
+    </section>
+
+    <!-- ── Droplets ── -->
+    <section id="droplets-section">
+      <div class="section-header">
+        <h2>DigitalOcean Droplets</h2>
+        <button class="btn btn-blue" onclick="showNewDropletForm()">+ New Droplet</button>
+      </div>
+
+      <div id="new-droplet-form" class="form-card hidden">
+        <h3>Spin Up New Droplet</h3>
+        <div class="form-row">
+          <label>Name
+            <input type="text" id="droplet-name" placeholder="my-worker" pattern="[a-z0-9\-]+">
+          </label>
+          <label>Size
+            <select id="droplet-size">
+              <option value="s-1vcpu-1gb">1 vCPU / 1 GB ($6/mo)</option>
+              <option value="s-1vcpu-2gb">1 vCPU / 2 GB ($12/mo)</option>
+              <option value="s-2vcpu-2gb">2 vCPU / 2 GB ($18/mo)</option>
+              <option value="s-2vcpu-4gb">2 vCPU / 4 GB ($24/mo)</option>
+              <option value="s-4vcpu-8gb">4 vCPU / 8 GB ($48/mo)</option>
+            </select>
+          </label>
+          <button class="btn btn-green" onclick="createDroplet()">Create</button>
+          <button class="btn btn-muted" onclick="hideNewDropletForm()">Cancel</button>
+        </div>
+      </div>
+
+      <div id="droplets" class="card-grid">
+        <div class="loading">Loading droplets...</div>
+      </div>
+    </section>
+
+    <!-- ── Container config editor ── -->
+    <section id="config-section">
+      <h2>Container Image Config</h2>
+      <p class="hint">Change the Docker image for any sandbox slot, then restart.</p>
+      <div class="form-card">
+        <div class="form-row">
+          <label>Slot
+            <select id="cfg-slot">
+              <option value="1">Box 1</option>
+              <option value="2">Box 2</option>
+              <option value="3">Box 3</option>
+              <option value="4">Box 4</option>
+            </select>
+          </label>
+          <label>Image
+            <input type="text" id="cfg-image" placeholder="ubuntu:24.04" value="ubuntu:24.04">
+          </label>
+          <button class="btn btn-blue" onclick="updateConfig()">Update &amp; Restart</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Logs viewer ── -->
+    <section id="logs-section">
+      <h2>Container Logs</h2>
+      <div class="form-row">
+        <label>Container
+          <select id="log-container"></select>
+        </label>
+        <button class="btn btn-muted" onclick="fetchLogs()">Fetch Logs</button>
+      </div>
+      <pre id="log-output" class="log-box">Select a container and click Fetch.</pre>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

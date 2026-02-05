@@ -1,0 +1,5 @@
+flask==3.1.*
+gunicorn==23.*
+docker==7.*
+requests==2.*
+pyyaml==6.*

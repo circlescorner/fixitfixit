@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and fill in your values
+do_token            = "dop_v1_xxxx"
+domain              = "sandbox.example.com"
+admin_email         = "you@example.com"
+region              = "nyc1"
+hub_size            = "s-1vcpu-1gb"
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+manage_dns          = false
+authelia_jwt_secret = "" # generate with: openssl rand -hex 32
+
+# On-demand droplets (managed via dashboard, but can be set here too)
+extra_droplets = {}

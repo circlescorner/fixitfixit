@@ -1,0 +1,263 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker.io
+  - docker-compose-v2
+  - curl
+  - jq
+  - git
+  - net-tools
+  - ufw
+  - python3-pip
+  - python3-venv
+
+write_files:
+  # ---- Caddyfile (reverse proxy + auto HTTPS) ----
+  - path: /opt/sandbox/caddy/Caddyfile
+    content: |
+      {
+        email ${admin_email}
+      }
+
+      ${domain} {
+        # Authelia portal
+        route /authelia/* {
+          reverse_proxy authelia:9091
+        }
+
+        # Auth verification endpoint (internal)
+        route /api/authz/* {
+          reverse_proxy authelia:9091
+        }
+
+        # Dashboard — protected by Authelia
+        route /* {
+          forward_auth authelia:9091 {
+            uri /api/authz/forward-auth
+            copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+          }
+          reverse_proxy dashboard:8000
+        }
+      }
+
+      # Wildcard for sandbox container sub-domains
+      *.${domain} {
+        tls {
+          dns digitalocean ${do_token}
+        }
+
+        forward_auth authelia:9091 {
+          uri /api/authz/forward-auth
+          copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+        }
+
+        # Dynamic upstream based on subdomain
+        reverse_proxy {header.X-Sandbox-Upstream}
+      }
+
+  # ---- Authelia configuration ----
+  - path: /opt/sandbox/authelia/configuration.yml
+    content: |
+      theme: dark
+      server:
+        address: 'tcp://:9091'
+
+      log:
+        level: info
+
+      totp:
+        issuer: ${domain}
+        period: 30
+        skew: 1
+
+      authentication_backend:
+        file:
+          path: /config/users.yml
+          password:
+            algorithm: argon2id
+            iterations: 3
+            memory: 65536
+            parallelism: 4
+            salt_length: 16
+            key_length: 32
+
+      access_control:
+        default_policy: two_factor
+
+      session:
+        name: sandbox_session
+        secret: '${authelia_secret}'
+        cookies:
+          - domain: '${domain}'
+            authelia_url: 'https://${domain}/authelia'
+            default_redirection_url: 'https://${domain}'
+
+      regulation:
+        max_retries: 3
+        find_time: 2m
+        ban_time: 5m
+
+      storage:
+        local:
+          path: /config/db.sqlite3
+
+      notifier:
+        filesystem:
+          filename: /config/notifications.txt
+
+  # ---- Authelia users (placeholder — set real password hash) ----
+  - path: /opt/sandbox/authelia/users.yml
+    content: |
+      # Generate a password hash with:
+      #   docker run --rm authelia/authelia:latest authelia crypto hash generate argon2 --password 'YOUR_PASSWORD'
+      users:
+        admin:
+          displayname: "Admin"
+          email: ${admin_email}
+          password: "$argon2id$v=19$m=65536,t=3,p=4$CHANGE_ME_GENERATE_A_HASH"
+          groups:
+            - admins
+
+  # ---- Core docker-compose (Caddy + Authelia + Dashboard) ----
+  - path: /opt/sandbox/docker-compose.yml
+    content: |
+      services:
+        caddy:
+          image: ghcr.io/caddyserver/caddy:2
+          restart: unless-stopped
+          ports:
+            - "80:80"
+            - "443:443"
+            - "443:443/udp"
+          volumes:
+            - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+            - caddy_data:/data
+            - caddy_config:/config
+          networks:
+            - frontend
+
+        authelia:
+          image: authelia/authelia:latest
+          restart: unless-stopped
+          volumes:
+            - ./authelia:/config
+          environment:
+            TZ: UTC
+          networks:
+            - frontend
+
+        dashboard:
+          build: ./dashboard
+          restart: unless-stopped
+          volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+            - /opt/sandbox:/opt/sandbox
+          environment:
+            DO_TOKEN: "${do_token}"
+            DOMAIN: "${domain}"
+            VPC_SUBNET: "${vpc_subnet}"
+          networks:
+            - frontend
+            - sandbox
+
+      networks:
+        frontend:
+          name: sandbox_frontend
+        sandbox:
+          name: sandbox_net
+          driver: bridge
+          ipam:
+            config:
+              - subnet: 172.30.0.0/24
+
+      volumes:
+        caddy_data:
+        caddy_config:
+
+  # ---- Sandbox containers compose ----
+  - path: /opt/sandbox/sandbox/docker-compose.yml
+    content: |
+      services:
+        box1:
+          image: ubuntu:24.04
+          container_name: sandbox-box1
+          hostname: box1
+          command: sleep infinity
+          restart: unless-stopped
+          labels:
+            sandbox.role: "general"
+            sandbox.slot: "1"
+          networks:
+            sandbox_net:
+              ipv4_address: 172.30.0.11
+
+        box2:
+          image: ubuntu:24.04
+          container_name: sandbox-box2
+          hostname: box2
+          command: sleep infinity
+          restart: unless-stopped
+          labels:
+            sandbox.role: "general"
+            sandbox.slot: "2"
+          networks:
+            sandbox_net:
+              ipv4_address: 172.30.0.12
+
+        box3:
+          image: ubuntu:24.04
+          container_name: sandbox-box3
+          hostname: box3
+          command: sleep infinity
+          restart: unless-stopped
+          labels:
+            sandbox.role: "general"
+            sandbox.slot: "3"
+          networks:
+            sandbox_net:
+              ipv4_address: 172.30.0.13
+
+        box4:
+          image: ubuntu:24.04
+          container_name: sandbox-box4
+          hostname: box4
+          command: sleep infinity
+          restart: unless-stopped
+          labels:
+            sandbox.role: "general"
+            sandbox.slot: "4"
+          networks:
+            sandbox_net:
+              ipv4_address: 172.30.0.14
+
+      networks:
+        sandbox_net:
+          external: true
+
+runcmd:
+  # Enable Docker
+  - systemctl enable --now docker
+
+  # UFW
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow from ${vpc_subnet}
+  - ufw --force enable
+
+  # Install Python deps for dashboard
+  - python3 -m venv /opt/sandbox/dashboard/venv
+  - /opt/sandbox/dashboard/venv/bin/pip install flask gunicorn docker python-digitalocean
+
+  # Clone the dashboard app (populated by Terraform file provisioner or git)
+  - mkdir -p /opt/sandbox/dashboard
+
+  # Bring up core services
+  - cd /opt/sandbox && docker compose up -d
+
+  # Mark ready
+  - echo "ready" > /opt/sandbox/status
