@@ -8,77 +8,8 @@ at the bottom.
 
 ## Questions Still Open
 
-### Q14: DO Recovery Codes — ACTION REQUIRED
-
-**Status**: BLOCKING — must be done before Phase 1 deployment
-
-You confirmed your DO account has 2FA but you do NOT have recovery codes
-saved. This is the single highest-risk item in the entire system. If you
-lose DO access (phone breaks, authenticator resets), you lose everything.
-
-**Action needed**:
-1. Go to cloud.digitalocean.com → Account → Security
-2. Generate and save recovery codes
-3. Store them somewhere safe (screenshot in a secure note, printed paper
-   in a drawer, whatever — just not ONLY on the phone that has the 2FA app)
-4. Confirm this is done before we deploy
-
----
-
-### Q15: Reserved IP — keep or drop?
-
-You said you have a DO Reserved IP you're paying for. Clarification needed:
-
-- **If it's attached to a running droplet**: It's free ($0/month)
-- **If it's floating (no droplet)**: It costs $5/month
-
-For this system, a Reserved IP is valuable — it means DNS doesn't need
-updating when you rebuild the hub. But it's not strictly required since
-we can programmatically update DO DNS records.
-
-**Options**:
-- a) Keep the Reserved IP, attach it to the hub ($0/month when attached).
-  DNS A record points to this IP permanently. Rebuilding the hub =
-  just reassign the IP.
-- b) Drop the Reserved IP, use the hub's auto-assigned IP. DNS updated
-  via DO API on each rebuild. Saves $5/month when you don't have a hub.
-
-**Recommended**: (a) — the stability is worth it, and it's free when
-attached.
-
----
-
-### Q16: Cloudflare — interested or not?
-
-You mentioned hearing about Cloudflare but never getting it to work.
-Cloudflare could add:
-- DDoS protection (free tier)
-- CDN caching (free tier)
-- Additional SSL/TLS layer
-- IP obfuscation (hides your hub's real IP)
-
-But it adds complexity and another account to manage. For a single-user
-system, it's optional.
-
-**Options**:
-- a) Skip Cloudflare. DO DNS + Caddy HTTPS is sufficient.
-- b) Add Cloudflare later as an enhancement (Phase 8+).
-
-**Recommended**: (a) for now. One less thing to configure.
-
----
-
-### Q17: Confirm atl1 availability
-
-DigitalOcean's `atl1` (Atlanta) region has limited resource availability.
-Before deploying, you should verify:
-1. s-1vcpu-1gb is available in atl1 (for the hub)
-2. s-4vcpu-8gb is available in atl1 (for workers)
-3. s-2vcpu-4gb is available in atl1 (recommended for budget — see cost section)
-
-**How to check**: DO panel → Create → Droplets → select atl1 → see available sizes.
-
-If sizes are unavailable, we fall back to nyc1 as planned.
+**None at this time** — all critical questions have been answered.
+Ready to begin Phase 1.
 
 ---
 
@@ -254,3 +185,45 @@ HTTPS, security modes become:
 WireGuard remains available as an optional extra for when user has a
 device that supports it.
 **Logged in**: DEC-014, DEC-023
+
+---
+
+### Q14-RESOLVED: DO Recovery Codes
+**Date resolved**: 2026-02-07
+**Answer**: User confirmed DO recovery codes will be saved before Phase 1
+deployment. This is the critical backup mechanism if DO 2FA fails.
+**Logged in**: Action item confirmed
+
+---
+
+### Q15-RESOLVED: Reserved IP
+**Date resolved**: 2026-02-07
+**Answer**: User has Reserved IP attached to a DO droplet, so it's free
+($0/month when attached). Will keep it and use it for the hub — provides
+stable DNS and eliminates need to update DNS records when rebuilding.
+**Logged in**: DEC-025
+
+---
+
+### Q16-RESOLVED: Cloudflare
+**Date resolved**: 2026-02-07
+**Answer**: Interested in Cloudflare but will defer to Phase 8. For now,
+DO DNS + Caddy HTTPS is sufficient. Cloudflare architecture will be
+planned in advance but not implemented until later phases.
+**Logged in**: DEC-026
+
+---
+
+### Q17-RESOLVED: atl1 availability
+**Date resolved**: 2026-02-07
+**Answer**: atl1 region confirmed with these premium Intel options
+available (all under 3-droplet limit initially):
+- $8/mo: 1GB/1CPU (hub candidate)
+- $16/mo: 2GB/1CPU
+- $24/mo: 2GB/2CPU
+- $32/mo: 4GB/2CPU (recommended worker size)
+- $48/mo: 8GB/2CPU (heavy workload option)
+
+Will use atl1 as primary region with nyc1 as fallback if capacity issues
+arise.
+**Logged in**: DEC-027

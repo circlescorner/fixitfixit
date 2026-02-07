@@ -515,3 +515,171 @@ needs a first-time setup wizard. No local tools needed beyond a web browser.
 ---
 
 *Add new decisions below this line. Use the next sequential DEC number.*
+
+### DEC-024: Provider abstraction deferred to Phase 6
+**Date**: 2026-02-06
+**Status**: Accepted
+**Context**: System will be tightly coupled to DigitalOcean initially. Future
+need to support other providers (AWS, Hetzner, local).
+**Decision**: Defer provider abstraction to Phase 6. Phases 1-5 use DO API
+directly. Document the CloudProvider interface in ARCHITECTURE.md so the
+abstraction strategy is planned from the beginning.
+**Reasoning**: Premature abstraction would slow down initial development.
+The system needs to work first. But planning the abstraction pattern early
+ensures we don't paint ourselves into architectural corners.
+**Consequences**: Dashboard code will directly use DO API through Phase 5.
+Phase 6 will extract this into a provider class and define the interface.
+Adding new providers = implementing one class with well-defined methods.
+
+---
+
+### DEC-025: Keep Reserved IP, attach to hub
+**Date**: 2026-02-07
+**Status**: Accepted — answers Q15
+**Context**: User has a Reserved IP that's currently attached to a droplet
+(free when attached, $5/mo when floating). Questioned whether to keep it.
+**Decision**: Keep the Reserved IP and attach it to the hub. DNS A record
+for circlescorner.xyz points to this IP permanently.
+**Reasoning**: Reserved IP provides stability — rebuilding the hub doesn't
+require DNS changes. It's free when attached ($0/mo). The alternative
+(dynamic IP + DNS updates via DO API) adds complexity for zero cost savings.
+**Consequences**: cloud-init process includes reassigning Reserved IP to the
+new hub after creation. DNS never needs updating. If hub is destroyed and
+recreated, just reassign the same IP.
+
+---
+
+### DEC-026: Cloudflare deferred to Phase 8
+**Date**: 2026-02-07
+**Status**: Accepted — answers Q16
+**Context**: User interested in Cloudflare (DDoS protection, CDN, IP hiding)
+but has struggled to configure it in the past. Questioned whether to include
+it in initial phases.
+**Decision**: Defer Cloudflare to Phase 8. For now, DO DNS + Caddy HTTPS is
+sufficient. Plan Cloudflare architecture in advance but don't implement until
+later phases are stable.
+**Reasoning**: Cloudflare adds complexity and another account to manage. For
+a single-user system with normal usage patterns, the benefits (DDoS protection,
+CDN) aren't critical. But the architecture should account for Cloudflare as a
+future enhancement. Planning now ensures compatibility later.
+**Consequences**: DNS stays at DigitalOcean for Phases 1-7. Caddy config will
+be compatible with Cloudflare proxy (HTTP origin). When Cloudflare is added,
+it slots in as a layer between internet and Caddy with minimal reconfiguration.
+
+---
+
+### DEC-027: Primary region is atl1, fallback is nyc1
+**Date**: 2026-02-07
+**Status**: Accepted — answers Q17
+**Context**: User confirmed atl1 (Atlanta) has these premium Intel options
+available: $8/mo (1GB/1CPU), $16/mo (2GB/1CPU), $24/mo (2GB/2CPU), $32/mo
+(4GB/2CPU), $48/mo (8GB/2CPU). Limited to 3 droplets initially.
+**Decision**: Primary region is atl1. If capacity issues arise during creation,
+fallback to nyc1. Hub will use s-1vcpu-1gb ($8/mo). Workers will use s-2vcpu-4gb
+($32/mo) as default, with option to spawn s-4vcpu-8gb ($48/mo) for heavy
+workloads.
+**Reasoning**: Atlanta is geographically closer to user (central US). Available
+droplet sizes fit the budget ($15/mo target). The $8/mo hub + $32/mo worker
+sizing keeps monthly cost at ~$40/mo for 1 hub + 1 worker running constantly.
+With smart hibernation, workers are only billed while active, easily fitting
+$15/mo budget.
+**Consequences**: Terraform and cloud-init will specify atl1 as region. Dashboard
+will default to atl1 when spawning workers. If region availability issues occur,
+user can manually select nyc1 from dashboard or we reconfigure default region.
+
+---
+
+### DEC-028: Initial setup uses time-limited unlock with token
+**Date**: 2026-02-07
+**Status**: Accepted
+**Context**: User correctly identified security concern: "Are we exposing the
+system unsecured during the setup wizard?" Need to balance security with
+simplicity during first-time setup.
+**Decision**: Hybrid security model for initial setup:
+1. Cloud-init blocks ports 80/443 by default (UFW deny)
+2. Cloud-init generates random 32-char setup token → /opt/sandbox/setup-token.txt
+3. User accesses DO Console, reads token
+4. User runs: `systemctl start setup-unlock` (unlocks 80/443 for 60 minutes)
+5. User visits domain, enters token, completes setup wizard
+6. After setup OR after 60 minutes, ports auto-lock if not needed
+7. Normal operations (with Authelia protection) keep ports open
+**Reasoning**: This eliminates the vulnerability window until user explicitly
+unlocks it. The token is cryptographically random (2^128 space), single-use,
+and time-limited. Even if someone discovers the hub is being set up, they can't
+access it without the token (which requires DO Console access). This is more
+secure than "always exposed" and simpler than "manual Authelia configuration
+via SSH."
+**Consequences**: cloud-init includes systemd unit for time-limited unlock.
+Setup wizard validates token before proceeding. Token file is deleted after
+successful setup. UFW rules auto-revert after timeout unless setup completes.
+
+---
+
+### DEC-029: Cross-device authentication via WebAuthn, TOTP as backup
+**Date**: 2026-02-07
+**Status**: Accepted
+**Context**: User wants to log in from any computer (work, library, friends'
+PCs) and verify the login from their iPhone. Needs zero software installation
+on the random PC. Must look like normal website traffic.
+**Decision**: WebAuthn with cross-device authentication as primary method,
+TOTP as backup:
+1. **Primary flow**: PC browser shows QR code → scan with iPhone camera →
+   Face ID prompt → iPhone sends signature → PC authenticated
+2. **Backup flow**: PC browser shows TOTP field → open authenticator app on
+   iPhone → enter 6-digit code → PC authenticated
+**Reasoning**: WebAuthn's cross-device auth (via Bluetooth proximity) is
+designed exactly for this use case. Works in stock Safari and Chrome with
+zero software on the PC. Looks like visiting any normal website — no weird
+traffic patterns, no VPN, no client certificates. TOTP provides fallback for
+corporate PCs with Bluetooth disabled.
+**Consequences**: Authelia configuration enables both WebAuthn and TOTP.
+Setup wizard enrolls Face ID first, then offers TOTP enrollment as optional
+backup. Dashboard shows both methods in Security Settings. Login page detects
+device capabilities and offers appropriate methods.
+
+---
+
+### DEC-030: Full desktop functionality on mobile, not a separate mobile UI
+**Date**: 2026-02-07
+**Status**: Accepted
+**Context**: User clarified: "I like Face ID for mobile, but I also need the
+control panel to be fully usable in desktop mode once logged in. I don't want
+to lose functionality just because we're making it iPhone friendly."
+**Decision**: Single responsive UI that provides full functionality on all
+devices. No separate "mobile version" or "lite mode." Dashboard uses responsive
+CSS (Tailwind) to adapt layout to screen size, but all features remain accessible.
+**Reasoning**: Modern web development allows one UI to work everywhere. A
+separate mobile UI would create maintenance burden (two UIs to maintain) and
+feature disparity (mobile users missing features). Responsive design ensures:
+- iPhone: touch-friendly buttons, readable text, collapsible menus
+- Desktop: full layout, keyboard shortcuts, multi-column views
+- Same features available on both
+**Consequences**: Dashboard UI uses mobile-first responsive design. All buttons
+have minimum 44px touch targets. Menus collapse on small screens but expand to
+full navigation on desktop. Testing happens on both iPhone Safari and desktop
+Chrome. Feature parity is maintained across all screen sizes.
+
+---
+
+### DEC-031: Control panel manages Docker on remote worker droplets
+**Date**: 2026-02-07
+**Status**: Accepted
+**Context**: User clarified vision: "From the control panel I'll need to be able
+to make/configure/control dockers onto those additional deployed droplets."
+**Decision**: Dashboard API extends to manage Docker containers on worker
+droplets, not just on the hub:
+1. Dashboard can SSH into worker droplets (via VPC)
+2. Dashboard can run docker commands on workers remotely
+3. Dashboard UI shows containers grouped by droplet (hub vs worker-1 vs worker-2)
+4. User can spawn containers on specific droplets from the dashboard
+**Reasoning**: This was always the intended architecture but needed explicit
+confirmation. The hub is the control plane, workers are compute nodes. Managing
+workers' Docker environments from the dashboard eliminates need for SSH access
+to each worker individually. Follows the "central control panel" model.
+**Consequences**: Dashboard needs SSH client capability to connect to workers.
+Worker cloud-init includes SSH key for dashboard access. Dashboard API extends
+container management to accept droplet_id parameter. UI shows droplet-aware
+container list and creation forms.
+
+---
+
