@@ -44,9 +44,12 @@ no vendor lock-in for identity. Your keys, your passwords, your infrastructure.
 
 ## Who It's For
 
-Currently: one person (you). Built as if it could serve others, so the
-architecture is modular and documented enough that someone else could deploy
-their own instance, or you could extend it to multi-user.
+Currently: one person (you), operating primarily from an iPhone 16 on
+corporate WiFi. No dedicated workstation. No VPN client for daily use.
+Everything must work from Safari with no plugins, certificates, or special
+software. Built as if it could serve others, so the architecture is modular
+and documented enough that someone else could deploy their own instance,
+or you could extend it to multi-user.
 
 ## What It Controls
 
@@ -119,14 +122,41 @@ rollback.
 
 ## Cost Model
 
+### Fixed Monthly Costs
+
 | Component                | Monthly Cost | Notes                           |
 |--------------------------|-------------|----------------------------------|
-| Hub (s-1vcpu-1gb)        | ~$6         | Always on                        |
-| On-demand droplet (small)| ~$6         | Per VM, destroy when not in use  |
-| On-demand droplet (large)| ~$48        | 4vCPU/8GB, for heavy workloads   |
-| Domain                   | ~$12/year   | Varies by registrar              |
-| WireGuard                | $0          | Runs on hub, no extra cost       |
-| Backups (DO snapshots)   | ~$1-2       | Per snapshot per month           |
+| Hub (s-1vcpu-1gb)        | $6.00       | Always on                        |
+| Hub backups              | $1.20       | Automated weekly snapshots        |
+| Reserved IP (attached)   | $0.00       | Free when attached to a droplet   |
+| **Total fixed**          | **$7.20**   |                                  |
+
+### Variable Costs (workers)
+
+| Worker Size              | Hourly Cost | For 6hrs/day | For 4hrs/week |
+|--------------------------|-------------|-------------|---------------|
+| s-1vcpu-1gb              | $0.009      | $1.17/mo    | $0.16/mo      |
+| s-2vcpu-4gb (recommended)| $0.036      | $4.64/mo    | $0.62/mo      |
+| s-4vcpu-8gb (heavy)      | $0.071      | $9.16/mo    | $1.22/mo      |
+
+### Budget Target: $15/month
+
+Using s-2vcpu-4gb workers (recommended for most dev work):
+- Hub: $7.20/mo (fixed)
+- 1 worker @ 6hr/weekday: $4.64/mo
+- Occasional burst (4 workers, 4hr/week): $2.48/mo
+- Snapshots (~2 hibernated workers): $3.00/mo
+- **Total: ~$14.32/mo** (within budget)
+
+Using s-4vcpu-8gb workers (heavy workloads):
+- Hub: $7.20/mo
+- 1 worker @ 6hr/weekday: $9.16/mo
+- Occasional burst: $4.88/mo
+- **Total: ~$21.24/mo** (over budget, use sparingly)
+
+### Setup Cost
+Initial deployment: $0 (first droplet billed hourly from creation).
+The $25 setup budget provides headroom for trial-and-error rebuilds.
 
 ## File Map
 

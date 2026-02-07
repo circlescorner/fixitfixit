@@ -1,8 +1,10 @@
 # Security Model
 
 **Document Status**: Living document — this is the most critical doc in the system
+**Last updated**: 2026-02-06 — revised for mobile-first (DEC-012, DEC-013)
 **Threat model**: Single-user system. Primary threat is accidental self-lockout.
 Secondary threat is unauthorized access from the internet.
+**Access model**: iPhone Safari on corporate WiFi. Normal HTTPS only.
 
 ---
 
@@ -13,12 +15,11 @@ Secondary threat is unauthorized access from the internet.
 3. [Target Authentication Stack](#target-authentication-stack)
 4. [Lockout Prevention (Breakglass)](#lockout-prevention-breakglass)
 5. [Secrets Management](#secrets-management)
-6. [VPN Design](#vpn-design)
-7. [VPN-Only Toggle](#vpn-only-toggle)
-8. [Firewall Policy](#firewall-policy)
-9. [SSH Hardening](#ssh-hardening)
-10. [Dashboard Security](#dashboard-security)
-11. [Secrets You Will Have](#secrets-you-will-have)
+6. [Security Modes (Replaces VPN-Only Toggle)](#security-modes)
+7. [Firewall Policy](#firewall-policy)
+8. [SSH Hardening](#ssh-hardening)
+9. [Dashboard Security](#dashboard-security)
+10. [Secrets You Will Have](#secrets-you-will-have)
 
 ---
 
@@ -26,13 +27,15 @@ Secondary threat is unauthorized access from the internet.
 
 The system has multiple access paths, each with its own auth:
 
-| Access Path          | Current Auth          | Target Auth                        |
-|----------------------|-----------------------|------------------------------------|
-| Web dashboard        | Password + TOTP       | Password + WebAuthn/FIDO2          |
-| SSH to hub           | SSH key               | SSH key (no change needed)         |
-| SSH to workers       | SSH key               | SSH key (no change needed)         |
-| WireGuard VPN        | (not implemented)     | WireGuard key pair                 |
-| DigitalOcean console | DO account login      | DO account login (out of scope)    |
+| Access Path          | Current Auth          | Target Auth                          |
+|----------------------|-----------------------|--------------------------------------|
+| Web dashboard        | Password + TOTP       | Password + Face ID (WebAuthn)        |
+| DigitalOcean Console | DO account login      | DO account login (breakglass)        |
+| SSH to hub           | SSH key               | SSH key (breakglass only, not daily) |
+| WireGuard VPN        | (not implemented)     | WireGuard key pair (optional, later) |
+
+**Primary daily access**: iPhone Safari → https://circlescorner.xyz →
+Password + Face ID. Looks like a normal website from any network.
 
 ---
 
@@ -64,29 +67,37 @@ It's not a strong guarantee of physical possession.
 
 ## Target Authentication Stack
 
-### Primary: Password + WebAuthn/FIDO2
+### Primary: Password + WebAuthn via iPhone Face ID
 
 **WebAuthn** (the web standard) / **FIDO2** (the protocol) works like this:
-1. During enrollment, your device generates a **public/private key pair**
-2. The **private key never leaves the device** — stored in secure hardware
-   (YubiKey's secure element, phone's TEE, laptop's TPM)
+1. During enrollment, your iPhone generates a **public/private key pair**
+2. The **private key never leaves the iPhone** — stored in the Secure Enclave
+   (dedicated hardware chip, tamper-resistant)
 3. The public key is stored by Authelia
-4. At login: Authelia sends a random challenge → your device signs it with
-   the private key → Authelia verifies with the public key
-5. This is cryptographic proof that **you physically have the enrolled device**
+4. At login: Authelia sends a random challenge → Face ID verifies you →
+   iPhone signs the challenge with the private key → Authelia verifies
+5. This is cryptographic proof that **you physically have your iPhone
+   AND you are you** (biometric)
 
-**Why this is better**:
+**Why this is better than TOTP**:
 - No shared secret to steal
-- Private key is in tamper-resistant hardware
-- Phishing-resistant (the browser binds the credential to the domain —
+- Private key is in tamper-resistant hardware (Secure Enclave)
+- Phishing-resistant (Safari binds the credential to circlescorner.xyz —
   a fake site can't request your credential)
-- Works with: YubiKeys, laptop fingerprint readers, phone biometrics,
-  security keys
+- Biometric verification — someone holding your phone still can't log in
+- Works in standard Safari — no app, no extension, nothing to install
 
-**What you need to buy/have**:
-- A **YubiKey** ($25-50) is the gold standard — physical USB key
-- OR your laptop's built-in fingerprint/Windows Hello/Touch ID
-- OR your phone as an authenticator (passkey via Bluetooth proximity)
+**What it looks like in practice**:
+1. Open Safari, go to circlescorner.xyz
+2. Type your password
+3. Face ID prompt appears → look at phone → authenticated
+4. Looks like a totally normal website login to anyone watching
+
+**What you need**: Your iPhone 16. That's it. Face ID is the authenticator.
+
+**iCloud Keychain sync**: If you enable it, your passkey syncs across
+Apple devices (iPad, Mac). If you get a new iPhone, the passkey transfers
+automatically via iCloud Keychain. This is your backup mechanism.
 
 **Authelia supports WebAuthn natively**. The change is configuration, not
 a component swap. In `authelia/configuration.yml`:
@@ -102,32 +113,35 @@ webauthn:
 
 ### Fallback: TOTP as Emergency Backup
 
-Keep TOTP enrolled but set it as secondary. If your YubiKey is lost/broken,
-TOTP is your backup. This is standard practice. The WebAuthn enrollment
-should happen **first**, TOTP second.
+Keep TOTP enrolled as secondary. If your iPhone is lost/broken and iCloud
+Keychain didn't sync the passkey, TOTP is your backup. Use an authenticator
+app (1Password, Authy, or the built-in iOS authenticator).
 
-### Optional Extra Layer: Client Certificates (Mutual TLS)
+### What About Logging In From Other Devices?
 
-For maximum security, Caddy can require a **client certificate** in addition
-to Authelia login. This means your browser must present a certificate signed
-by your own CA to even reach the login page.
+You said you sometimes use work PCs, library computers, and friends' PCs.
 
-**How it works**:
-1. You create a self-signed Certificate Authority (CA)
-2. You issue a client certificate from that CA
-3. You install the cert in your browser
-4. Caddy is configured to require client certs signed by your CA
-5. Without the cert, the TLS handshake fails — the site doesn't even load
+**With WebAuthn cross-device authentication**: Safari and Chrome support
+using your phone as a "roaming authenticator." The flow:
+1. Open browser on any PC, go to circlescorner.xyz
+2. Type password
+3. Browser shows "Use your phone" option
+4. Scan QR code with iPhone camera
+5. Face ID prompt on phone → authenticated on PC
+6. No software installed on the PC. Nothing left behind.
 
-**Pros**: Even if someone knows your password and has a TOTP code, they
-can't reach the login page without the client cert installed in their browser.
+This works because WebAuthn supports cross-device authentication via
+Bluetooth proximity. The PC's browser talks to your iPhone over BLE.
+The private key never leaves your phone.
 
-**Cons**: You have to install the cert on every device you want to use.
-If you lose the CA key, you have to regenerate everything. Can be annoying
-to manage across devices.
+**Limitation**: The PC must have Bluetooth and the browser must support
+FIDO2 cross-device auth. Most modern browsers do. Corporate PCs with
+locked-down Bluetooth may not. In that case, fall back to TOTP.
 
-**Recommendation**: Start with WebAuthn. Add client certs later if you
-want the extra layer. Don't do it in phase 1.
+### Client Certificates — NOT recommended for your scenario
+
+Client certs require installing certificates on every device. You can't
+install certs on work PCs. Explicitly ruled out per DEC-012.
 
 ---
 
@@ -135,80 +149,81 @@ want the extra layer. Don't do it in phase 1.
 
 This is the section that exists because you keep locking yourself out.
 
-### Principle: SSH Is the Breakglass
+### Principle: DO Console Is the Breakglass
 
-SSH to the hub using your SSH key must **always work**, independent of:
-- Authelia being up or down
-- Caddy being up or down
-- Docker being up or down
-- WireGuard being up or down
-- The web dashboard being up or down
-
-SSH key authentication goes directly to the OS, not through any of the web
-stack. As long as:
+DigitalOcean's web console provides a browser-based terminal that requires
+only your DO account login. It works from an iPhone. It doesn't depend on
+SSH keys, firewall rules, Caddy, Authelia, Docker, or anything else running
+on the hub. As long as:
 1. The droplet is running
-2. Port 22 is open (or WireGuard is up and 22 is open on the WG interface)
-3. Your SSH private key exists on your local machine
+2. You can log into your DO account
 
-...you can get in.
+...you can get a root shell via DO Console and fix anything.
+
+This is why saving your DO recovery codes is the #1 priority.
 
 ### Lockout Recovery Procedures
 
+All recovery starts with: DO panel → Droplets → sandbox-hub → Console
+
 **Scenario 1: Authelia misconfiguration (can't log into web)**
 ```
-ssh root@<hub-ip>
-# Check Authelia logs
+# In DO Console:
 docker logs sandbox-authelia-1
-# Fix the config
 nano /opt/sandbox/authelia/configuration.yml
-# Restart
 cd /opt/sandbox && docker compose restart authelia
 ```
 
 **Scenario 2: Caddy misconfiguration (HTTPS broken)**
 ```
-ssh root@<hub-ip>
+# In DO Console:
 nano /opt/sandbox/caddy/Caddyfile
 cd /opt/sandbox && docker compose restart caddy
 # If totally broken:
 cd /opt/sandbox && docker compose down && docker compose up -d
 ```
 
-**Scenario 3: Locked out of SSH (key lost/changed)**
+**Scenario 3: Firewall blocks everything**
 ```
-# Use DigitalOcean web console (Recovery Console)
-# Browser → cloud.digitalocean.com → Droplets → sandbox-hub → Console
-# This gives you root access without SSH
-# From there, add your new SSH key to /root/.ssh/authorized_keys
+# In DO Console:
+ufw status
+ufw allow 80/tcp
+ufw allow 443/tcp
+# Or reset entirely:
+ufw disable && ufw reset
+ufw default deny incoming && ufw default allow outgoing
+ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp
+ufw allow from 10.100.0.0/16
+ufw --force enable
 ```
 
-**Scenario 4: Firewall blocks everything**
+**Scenario 4: Everything is broken, nuke and rebuild**
 ```
-# DigitalOcean web console again
-# Or: destroy and recreate via terraform apply
-# Your config is in git, so you lose nothing
+# From DO panel (iPhone browser):
+1. Destroy the hub droplet
+2. Create new droplet with same cloud-init user data
+3. Reassign Reserved IP to new droplet
+4. Wait for cloud-init, then visit the domain
+5. Complete setup wizard again
+# Your code is in GitHub. The Reserved IP survives. DNS doesn't change.
 ```
 
-**Scenario 5: Everything is broken, nuke and rebuild**
+**Scenario 5: Lost access to DO account**
 ```
-# From your local machine:
-cd terraform
-terraform destroy  # tears down everything
-terraform apply    # rebuilds from code
-./scripts/set-password.sh 'YourPassword'
-# SSH in, update users.yml, restart authelia
-# You're back up with a fresh hub
+# Use DO recovery codes (THIS IS WHY YOU MUST SAVE THEM)
+# If no recovery codes: contact DO support for account recovery
+# This is the last resort. Everything else is recoverable from DO Console.
 ```
 
 ### Breakglass Checklist (Things That Must Always Be True)
 
-- [ ] SSH key pair exists on at least 2 devices (laptop + backup)
-- [ ] SSH key is enrolled in DigitalOcean account
-- [ ] Port 22 or WireGuard port is open in DO firewall
-- [ ] DigitalOcean account has recovery email set
-- [ ] DigitalOcean account has its own 2FA (for web console access)
-- [ ] Terraform state is accessible (local + backup)
+- [ ] DO recovery codes saved in at least 2 places
+- [ ] DO account email is accessible
+- [ ] DO account has 2FA enabled
+- [ ] Reserved IP exists and is attached to hub
+- [ ] DNS A record points to Reserved IP
 - [ ] This git repo is pushed to GitHub as backup
+- [ ] iCloud Keychain enabled (for WebAuthn passkey sync/backup)
 
 ---
 
@@ -291,142 +306,122 @@ For a single-user system, file-based secrets are fine. If you later want:
 
 ---
 
-## VPN Design
+## Security Modes (Replaces VPN-Only Toggle)
 
-### WireGuard Configuration
+The original design had a VPN-only toggle. This has been redesigned because
+the user can't use WireGuard as a daily driver (corporate WiFi, iPhone-only).
+See DEC-014 and DEC-023.
 
-**Server (hub) — `/opt/sandbox/wireguard/wg0.conf`**:
-```ini
-[Interface]
-Address = 10.200.0.1/24
-ListenPort = 51820
-PrivateKey = <hub-private-key>
-# PostUp/PostDown rules for routing
+### Three Security Modes
 
-[Peer]
-# Your laptop/device
-PublicKey = <your-public-key>
-AllowedIPs = 10.200.0.2/32
-```
+**Normal Mode** (daily driver):
+- Ports 80, 443 open to internet → dashboard accessible from any IP
+- Port 22 open to internet → SSH available for emergencies
+- Authentication: Password + Face ID (WebAuthn)
+- This is how you'll use the system 99% of the time
+- Looks like visiting any normal website
 
-**Client (your device) — downloadable from dashboard**:
-```ini
-[Interface]
-Address = 10.200.0.2/24
-PrivateKey = <your-private-key>
-DNS = 1.1.1.1
+**Restricted Mode** (extra security):
+- Ports 80, 443 open **only to allowlisted IPs**
+- Dashboard has "Add my current IP" button (detects your IP, adds to allowlist)
+- SSH open to internet (breakglass)
+- Good for: when you want to limit who can even see the login page
+- Implementation: UFW rules with specific source IPs
 
-[Peer]
-PublicKey = <hub-public-key>
-Endpoint = <hub-public-ip>:51820
-AllowedIPs = 10.200.0.0/24, 10.100.0.0/16, 172.30.0.0/24
-PersistentKeepalive = 25
-```
+**Lockdown Mode** (maximum security / idle):
+- Ports 80, 443 **blocked** from all internet traffic
+- Port 22 open to internet (breakglass)
+- Only accessible via DO Console
+- Good for: when you're done for the day and don't want the system exposed
+- Re-enable via DO Console: `ufw allow 80/tcp && ufw allow 443/tcp`
 
-**Why these AllowedIPs on the client**:
-- `10.200.0.0/24` — route WG subnet through tunnel
-- `10.100.0.0/16` — route VPC traffic through tunnel (reach workers)
-- `172.30.0.0/24` — route Docker sandbox traffic through tunnel (reach box1-4)
+### Implementation
 
-This is a **split tunnel** — only traffic to your infrastructure goes
-through WG. Regular internet browsing goes direct.
-
-### Key Generation
-
-WireGuard keys are generated with:
 ```bash
-wg genkey | tee privatekey | wg pubkey > publickey
-```
-
-The dashboard should have a "Generate WireGuard Config" button that:
-1. Generates a key pair
-2. Adds the peer to the server config
-3. Reloads WireGuard (`wg syncconf wg0 /etc/wireguard/wg0.conf`)
-4. Offers the client config as a download (or QR code for phone)
-
----
-
-## VPN-Only Toggle
-
-This is the "kill switch" for public access.
-
-**Public mode (default)**:
-- Ports 80, 443 open to internet → web dashboard accessible
-- Port 51820 open to internet → WireGuard accessible
-- Port 22 open to internet → SSH accessible
-
-**VPN-only mode**:
-- Ports 80, 443 **blocked** from internet
-- Port 51820 open to internet → WireGuard still accessible
-- Port 22 open **only from VPN** (10.200.0.0/24) and VPC (10.100.0.0/16)
-- Web dashboard accessible only through WireGuard tunnel
-
-**Implementation**: UFW rules toggled by the dashboard:
-```bash
-# Switch to VPN-only
-ufw delete allow 80/tcp
-ufw delete allow 443/tcp
-ufw delete allow 22/tcp
-ufw allow from 10.200.0.0/24 to any port 22
-ufw allow from 10.200.0.0/24 to any port 80
-ufw allow from 10.200.0.0/24 to any port 443
-
-# Switch to public
+# Normal mode (default)
 ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
+
+# Restricted mode
+ufw delete allow 80/tcp
+ufw delete allow 443/tcp
+ufw allow from <your-ip> to any port 80
+ufw allow from <your-ip> to any port 443
+# Repeat for each allowlisted IP
+
+# Lockdown mode
+ufw delete allow 80/tcp
+ufw delete allow 443/tcp
+# Remove any per-IP rules too
 ```
 
-**CRITICAL SAFETY**: The toggle must **never** block port 51820. If WireGuard
-is blocked while in VPN-only mode, you're locked out of everything.
+### Safety Measures
 
-**Dashboard UI**: A toggle switch labeled "Public Access" / "VPN Only" with
-a confirmation dialog: "This will block web access from the internet. You
-must have WireGuard connected to continue. Are you connected now?"
+- **Switching TO Restricted**: Dashboard auto-adds your current IP first.
+  You can't lock yourself out by switching to Restricted while connected.
+- **Switching TO Lockdown**: Confirmation dialog:
+  "This will disable ALL web access. You can only re-enable via
+  DigitalOcean Console. Are you sure?"
+- **SSH always open**: Port 22 stays open in all modes as a breakglass.
+  (Consider restricting SSH to VPC + allowlisted IPs in Restricted mode.)
+- **Mode displayed on dashboard**: Current mode shown prominently so you
+  always know what state you're in.
+
+### WireGuard (Optional, Phase 5+)
+
+WireGuard remains in the design as an OPTIONAL enhancement for Phase 5+.
+It's not required for daily operation. If you install the WireGuard app
+on your iPhone, you could use it as an additional security layer:
+- Connect via WireGuard tunnel from iPhone
+- Switch to Restricted mode with only WireGuard subnet allowlisted
+- Now even the login page is hidden from the internet
+
+But this is optional and not part of the core security model.
 
 ---
 
 ## Firewall Policy
 
-### Current (V1)
+### Current (V1) — Normal Mode
 
 ```
 INBOUND:
-  22/tcp    from 0.0.0.0/0      # SSH from anywhere
-  80/tcp    from 0.0.0.0/0      # HTTP from anywhere
-  443/tcp   from 0.0.0.0/0      # HTTPS from anywhere
+  22/tcp    from 0.0.0.0/0      # SSH (breakglass)
+  80/tcp    from 0.0.0.0/0      # HTTP → redirect to HTTPS
+  443/tcp   from 0.0.0.0/0      # HTTPS (primary access)
   1-65535   from 10.100.0.0/16  # All from VPC
 
 OUTBOUND:
   all       to 0.0.0.0/0        # Everything out
 ```
 
-### Target (V2) — Public Mode
+### Target (V2) — Restricted Mode
 
 ```
 INBOUND:
-  22/tcp    from 0.0.0.0/0      # SSH (consider restricting later)
-  80/tcp    from 0.0.0.0/0      # HTTP redirect
-  443/tcp   from 0.0.0.0/0      # HTTPS
-  51820/udp from 0.0.0.0/0      # WireGuard
+  22/tcp    from 0.0.0.0/0      # SSH (breakglass, always open)
+  80/tcp    from <allowlist>     # HTTP from allowed IPs only
+  443/tcp   from <allowlist>     # HTTPS from allowed IPs only
   1-65535   from 10.100.0.0/16  # VPC
-  1-65535   from 10.200.0.0/24  # WireGuard peers
 
 OUTBOUND:
   all       to 0.0.0.0/0
 ```
 
-### Target (V2) — VPN-Only Mode
+### Target (V2) — Lockdown Mode
 
 ```
 INBOUND:
-  51820/udp from 0.0.0.0/0      # WireGuard (MUST remain open)
+  22/tcp    from 0.0.0.0/0      # SSH (breakglass, always open)
   1-65535   from 10.100.0.0/16  # VPC
-  1-65535   from 10.200.0.0/24  # WireGuard peers
 
 OUTBOUND:
   all       to 0.0.0.0/0
 ```
+
+Note: SSH remains open in all modes as the ultimate breakglass path.
+DO Console also works regardless of firewall rules (it's out-of-band).
 
 ---
 

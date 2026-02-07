@@ -6,238 +6,251 @@ at the bottom.
 
 ---
 
-## Questions I Need You to Answer
+## Questions Still Open
 
-These are decisions I cannot make for you. They affect the system design
-and need your input before we can proceed with certain phases.
+### Q14: DO Recovery Codes — ACTION REQUIRED
+
+**Status**: BLOCKING — must be done before Phase 1 deployment
+
+You confirmed your DO account has 2FA but you do NOT have recovery codes
+saved. This is the single highest-risk item in the entire system. If you
+lose DO access (phone breaks, authenticator resets), you lose everything.
+
+**Action needed**:
+1. Go to cloud.digitalocean.com → Account → Security
+2. Generate and save recovery codes
+3. Store them somewhere safe (screenshot in a secure note, printed paper
+   in a drawer, whatever — just not ONLY on the phone that has the 2FA app)
+4. Confirm this is done before we deploy
 
 ---
 
-### Q1: What domain registrar are you using for circlescorner.xyz?
+### Q15: Reserved IP — keep or drop?
 
-**Why it matters**: If DNS is managed by DigitalOcean, we can use Terraform
-to create DNS records automatically (`manage_dns = true`). If DNS is at
-Cloudflare, Namecheap, or another registrar, you'll need to manually create
-A records pointing to the hub IP, or we need to add that provider to Terraform.
+You said you have a DO Reserved IP you're paying for. Clarification needed:
+
+- **If it's attached to a running droplet**: It's free ($0/month)
+- **If it's floating (no droplet)**: It costs $5/month
+
+For this system, a Reserved IP is valuable — it means DNS doesn't need
+updating when you rebuild the hub. But it's not strictly required since
+we can programmatically update DO DNS records.
 
 **Options**:
-- a) DNS is at DigitalOcean (set `manage_dns = true`)
-- b) DNS is at another registrar (which one?) — manual A records
-- c) DNS is at Cloudflare — could add Cloudflare Terraform provider
+- a) Keep the Reserved IP, attach it to the hub ($0/month when attached).
+  DNS A record points to this IP permanently. Rebuilding the hub =
+  just reassign the IP.
+- b) Drop the Reserved IP, use the hub's auto-assigned IP. DNS updated
+  via DO API on each rebuild. Saves $5/month when you don't have a hub.
+
+**Recommended**: (a) — the stability is worth it, and it's free when
+attached.
 
 ---
 
-### Q2: Do you have a WebAuthn-capable device?
+### Q16: Cloudflare — interested or not?
 
-**Why it matters**: Phase 4 requires hardware-bound authentication. The
-options are:
+You mentioned hearing about Cloudflare but never getting it to work.
+Cloudflare could add:
+- DDoS protection (free tier)
+- CDN caching (free tier)
+- Additional SSL/TLS layer
+- IP obfuscation (hides your hub's real IP)
 
-- **YubiKey** (~$25-50 USD): Physical USB security key. Gold standard.
-  Works on any computer with a USB port. Recommended: YubiKey 5 NFC
-  (also works with phones).
-- **Laptop fingerprint reader**: If your laptop has one (Windows Hello,
-  Touch ID), it can serve as a WebAuthn authenticator.
-- **Phone biometric**: Your phone can act as a roaming authenticator
-  via Bluetooth proximity, but this is more finicky.
-
-**My recommendation**: Buy a YubiKey 5 NFC. It's $50 and it's the most
-reliable, portable, and secure option. It also works for SSH key auth
-(stores SSH keys on the device), which gives you a hardware-bound SSH key.
-
-**Your answer**: Which device(s) do you have or are willing to get?
-
----
-
-### Q3: What is your current SSH key situation?
-
-**Why it matters**: SSH is the breakglass access path. I need to understand
-what you have:
-
-- Do you have an existing SSH key pair? Where? (laptop, another machine?)
-- Is it backed up anywhere?
-- Is it already registered with DigitalOcean?
-- Do you use an SSH agent or passphrase?
-
-If you don't have one, the setup script generates one. But you need to
-understand where it is and back it up.
-
----
-
-### Q4: What DigitalOcean region do you prefer?
-
-**Why it matters**: Latency. Pick the region closest to where you physically are.
-
-- `nyc1`, `nyc3` — New York (US East)
-- `sfo3` — San Francisco (US West)
-- `lon1` — London (Europe)
-- `ams3` — Amsterdam (Europe)
-- `sgp1` — Singapore (Asia-Pacific)
-- `blr1` — Bangalore (India)
-- `tor1` — Toronto (Canada)
-- `fra1` — Frankfurt (Europe)
-- `syd1` — Sydney (Australia)
-
-Current default is `nyc1`. Is that correct for you?
-
----
-
-### Q5: What's your budget tolerance for on-demand droplets?
-
-**Why it matters**: The dashboard currently allows creating any size
-droplet up to 4vCPU/8GB ($48/mo). Should we:
-
-- a) Keep it as-is (you manage costs manually)
-- b) Add a spending limit (max N droplets, max $ per month)
-- c) Add an auto-destroy timer (droplets destroyed after N hours if
-  you forget)
-
-**Recommended**: Option (c) with a configurable default of 8 hours.
-You can override per droplet. This prevents forgotten $48/month
-droplets running for weeks.
-
----
-
-### Q6: Do you want the hub accessible via IP address or domain only?
-
-**Why it matters**: Currently, Caddy is configured to serve
-`circlescorner.xyz` and `*.circlescorner.xyz`. If DNS breaks, you
-can't reach the dashboard via the domain. Options:
-
-- a) **Domain only** (current): Clean but fragile if DNS breaks
-- b) **Domain + IP fallback**: Caddy also serves on the IP address
-  (HTTP only, no TLS), with a simple auth page. Less secure but
-  always reachable.
-- c) **Domain + WireGuard IP**: After Phase 3, you can always reach
-  the dashboard via the WireGuard IP (10.200.0.1), bypassing DNS
-  entirely.
-
-**Recommended**: (a) for now, (c) after Phase 3. The WireGuard
-tunnel makes the IP fallback unnecessary.
-
----
-
-### Q7: How do you want to handle the DO API token in the dashboard?
-
-**Why it matters**: Currently, the DO API token is passed as an
-environment variable to the dashboard container. This means:
-- It's visible in `docker inspect`
-- It's in the compose file (cloud-init embeds it)
-- The dashboard has full API access to your DO account
+But it adds complexity and another account to manage. For a single-user
+system, it's optional.
 
 **Options**:
-- a) Keep as-is (acceptable for single-user, secured behind auth)
-- b) Use a read-only token for listing, separate write token for
-  creation (DO doesn't support this granularity yet, but might)
-- c) Create a sub-account/team with limited permissions
-- d) Proxy DO API calls through a separate service with rate limiting
+- a) Skip Cloudflare. DO DNS + Caddy HTTPS is sufficient.
+- b) Add Cloudflare later as an enhancement (Phase 8+).
 
-**Recommended**: (a) for now. The dashboard is behind Authelia. If
-Authelia is breached, the attacker has bigger problems than the DO
-token. Revisit if adding multi-user support.
+**Recommended**: (a) for now. One less thing to configure.
 
 ---
 
-### Q8: What are your "current stable projects"?
+### Q17: Confirm atl1 availability
 
-**Why it matters**: Phase 5 (Project Persistence) needs to know what
-projects need persistent storage, how much data they generate, and
-what their dependencies are.
+DigitalOcean's `atl1` (Atlanta) region has limited resource availability.
+Before deploying, you should verify:
+1. s-1vcpu-1gb is available in atl1 (for the hub)
+2. s-4vcpu-8gb is available in atl1 (for workers)
+3. s-2vcpu-4gb is available in atl1 (recommended for budget — see cost section)
 
-You mentioned:
-- UI-TARS-desktop (AI desktop automation)
-- claude-mem (Claude persistent memory)
-- superpowers (AI capability extensions)
+**How to check**: DO panel → Create → Droplets → select atl1 → see available sizes.
 
-Plus "your own actual current stable projects." What are those?
-What do they need?
-- How much disk space?
-- Do they need a database?
-- Do they need GPU?
-- Do they need specific OS packages?
-- Do they need to be always-on or on-demand?
-
----
-
-### Q9: Do you want git hosting on your domain?
-
-**Why it matters**: You said "never leaving my domain of circlescorner.xyz"
-for git operations. This implies self-hosted git. Options:
-
-- a) **Gitea on the hub**: Lightweight, self-hosted GitHub-like interface.
-  Accessible at git.circlescorner.xyz. Repos stay on your infrastructure.
-- b) **Bare git repos on the hub**: No web UI, just `git push` via SSH.
-  Simplest option. Use GitHub as a mirror/backup.
-- c) **GitHub private repos as primary**: Use GitHub but access only via
-  VPN/SSH. Simpler but data lives on GitHub.
-- d) **Gitea on a dedicated worker**: Separate from the hub to keep the
-  hub lightweight.
-
-**Recommended**: Start with (b) in Phase 2 (push on-hub config to a bare
-repo). Add Gitea (a or d) in Phase 8+ when you need a web UI for repos.
-
----
-
-### Q10: What's your recovery email / account backup?
-
-**Why it matters**: DigitalOcean web console is the ultimate breakglass.
-If you lose access to your DO account, you lose the ability to recover.
-
-- Is your DO account protected with 2FA?
-- Do you have recovery codes saved?
-- Is the account email an address you won't lose access to?
-
-This isn't something I configure — it's something you verify and confirm.
-
----
-
-### Q11: What devices will you access the dashboard from?
-
-**Why it matters**: Affects authentication choices and VPN client setup.
-
-- Laptop only?
-- Laptop + phone?
-- Multiple laptops?
-- Tablet?
-
-Each device needs:
-- WebAuthn enrollment (if using YubiKey, the same key works everywhere)
-- WireGuard client config (one config per device)
-- Optionally: client certificate (if we go that route)
-
----
-
-### Q12: Time zone preference?
-
-**Why it matters**: Changelog timestamps, log timestamps, cron schedules
-for backups. Everything is UTC by default (standard for servers), but the
-dashboard could display times in your local timezone.
-
----
-
-### Q13: What happens when you say "toggle public off"?
-
-**Why it matters**: Need to define exactly what VPN-only mode means for
-your workflow. When you toggle public off:
-
-- a) Can you still SSH from the internet? (Current plan: no, SSH only via VPN)
-- b) Or should SSH always be open from the internet as an escape hatch?
-
-Option (a) is more secure. Option (b) is safer against lockout. If you
-have WireGuard set up and tested, (a) is fine. If WireGuard is new to
-you, keep (b) until you're confident.
-
-**Recommended**: (b) initially. Switch to (a) after you've been using
-WireGuard reliably for a month.
+If sizes are unavailable, we fall back to nyc1 as planned.
 
 ---
 
 ## Resolved Questions
 
-*Move questions here when answered. Include the answer and date.*
+### Q1-RESOLVED: Domain registrar and DNS
+**Date resolved**: 2026-02-06
+**Answer**: Domain at Namecheap, nameservers pointed to DigitalOcean
+(ns1/ns2/ns3.digitalocean.com). DNS records managed in DO panel. Namecheap
+account has 2FA. Has a Reserved IP (see Q15).
+**Logged in**: DEC-011
 
-```
-### Q-RESOLVED: [question]
-**Date resolved**: YYYY-MM-DD
-**Answer**: [what was decided]
-**Logged in**: DEC-NNN in DECISIONS-LOG.md
-```
+---
+
+### Q2-RESOLVED: Authentication device
+**Date resolved**: 2026-02-06
+**Answer**: iPhone 16 is the PRIMARY and often ONLY device. No trusted PC.
+Frequently on corporate networks, public computers, or friends' machines.
+Cannot install software or certificates on work/public computers. Must
+look like normal HTTPS website traffic. Willing to install apps and buy
+accessories for the iPhone.
+
+**Critical implications**:
+- WebAuthn via iPhone Face ID is the primary 2FA (built into Safari, no
+  app needed, looks like a normal website)
+- No VPN client requirement for daily use (WireGuard = unusual traffic on
+  corporate networks)
+- No client certificates (can't install on work/public PCs)
+- No SSH client requirement (iPhone SSH apps exist but not the primary path)
+- YubiKey recommendation withdrawn — Face ID is the authenticator
+- WireGuard becomes optional, not required for daily access
+
+**Logged in**: DEC-012, DEC-013, DEC-014
+
+---
+
+### Q3-RESOLVED: SSH key situation
+**Date resolved**: 2026-02-06
+**Answer**: Has SSH key pairs on iPhone (in saved notes — not ideal). Has
+a pattern of locking himself out by making systems "too secure" and then
+destroying the droplet. Considered "no SSH at all" philosophy. Interested
+in a self-hosted secrets server.
+
+**Decision**: SSH remains as breakglass only, accessible via DO web console
+when needed. Not the primary access method. SSH keys will be managed
+through the dashboard in a later phase. For now, DO Console is the
+emergency access path.
+**Logged in**: DEC-015
+
+---
+
+### Q4-RESOLVED: DigitalOcean region
+**Date resolved**: 2026-02-06
+**Answer**: `atl1` (Atlanta) preferred, `nyc1` as fallback if atl1 has
+availability issues. User is in central US (closer to Atlanta than NYC).
+**Logged in**: DEC-016
+
+---
+
+### Q5-RESOLVED: Budget and auto-destroy
+**Date resolved**: 2026-02-06
+**Answer**: Comprehensive budget requirements:
+- $25 max setup cost, $15/month target operating cost
+- Auto-destroy with smart hibernation: warn after 3min inactivity, extend
+  2-60min, kill after 2min no response
+- MUST snapshot/preserve state before destroy (sleep, not death)
+- Budget controller in dashboard: per-deployment budget, monthly budget,
+  spending tracker, cost estimator before spawning
+- Max droplet size: 4vCPU/8GB
+- Expected usage: 1x large worker 6hr/weekday + occasional 4x large 4hr/week
+- Hub can be powered down when known to be unused for extended periods
+
+**Budget reality** (at s-4vcpu-8gb pricing):
+- Hub: $6/mo
+- Workers at described usage: ~$14/mo
+- Total: ~$20/mo (exceeds $15 target)
+
+**At s-2vcpu-4gb pricing** (recommended for most work):
+- Hub: $6/mo
+- Workers at described usage: ~$7/mo
+- Total: ~$13/mo (fits budget)
+- Can still use 4vCPU/8GB for occasional heavy workloads
+
+**Logged in**: DEC-017, DEC-018
+
+---
+
+### Q6-RESOLVED: Hub accessible by IP or domain
+**Date resolved**: 2026-02-06
+**Answer**: Chose option C initially, but given iPhone-only constraint and
+no WireGuard as default, revised to: domain-only for daily use (normal
+HTTPS), with DO Console as emergency backup. If Reserved IP is kept,
+the IP can be used as a direct fallback if DNS breaks (Caddy can serve
+both domain and IP).
+**Logged in**: DEC-011
+
+---
+
+### Q7-RESOLVED: DO API token handling
+**Date resolved**: 2026-02-06
+**Answer**: User is concerned about exposing sensitive operations via www.
+Wants safety net against "doing something stupid." Considered proxy VM
+but that adds cost.
+
+**Decision**: Keep token server-side (Flask environment, never sent to
+browser). Add safety layers: confirmation dialogs, rate limiting on
+destructive actions, audit log, undo-window for creates. Consider moving
+DO API operations to a separate internal service in a later phase.
+**Logged in**: DEC-019
+
+---
+
+### Q8-RESOLVED: Current stable projects
+**Date resolved**: 2026-02-06
+**Answer**: No projects to host immediately. Wants persistent project
+momentum as things start working — systems should "remember where they
+were" across spawn cycles. Initial projects to explore and prepare for:
+- UI-TARS-desktop (bytedance) — AI desktop automation
+- claude-mem (thedotmack) — Claude persistent memory
+- superpowers (obra) — AI capability extensions
+
+Dependencies to be explored when we reach Phase 5.
+**Logged in**: DEC-020
+
+---
+
+### Q9-RESOLVED: Git hosting
+**Date resolved**: 2026-02-06
+**Answer**: Bare repos to start. Interested in self-hosted Gitea later,
+particularly as a secrets management interface. The path: bare repos →
+Gitea on a dedicated VM → potentially secrets management through Gitea.
+**Logged in**: DEC-021
+
+---
+
+### Q10-RESOLVED: DO account backup
+**Date resolved**: 2026-02-06
+**Answer**: DO has 2FA, does NOT have recovery codes saved, email
+"probably safe" but not certain. See Q14 — saving recovery codes is a
+BLOCKING action item.
+**Logged in**: Captured in Q14 (still open)
+
+---
+
+### Q11-RESOLVED: Access devices
+**Date resolved**: 2026-02-06
+**Answer**: Same as Q2. iPhone 16 primary. Occasionally work PCs, public
+computers, friends' machines. No trusted PC. Everything must work in a
+standard web browser with no plugins, extensions, or installed software.
+**Logged in**: DEC-012
+
+---
+
+### Q12-RESOLVED: Timezone
+**Date resolved**: 2026-02-06
+**Answer**: Central US (America/Chicago, CST/CDT).
+**Logged in**: DEC-022
+
+---
+
+### Q13-RESOLVED: VPN-only toggle behavior
+**Date resolved**: 2026-02-06
+**Answer**: Option A — maximum security. "As secure as reasonably
+achievable."
+
+**However**: Given iPhone-only constraint and no WireGuard as daily driver,
+the concept of "VPN-only toggle" is redesigned. Instead of blocking public
+HTTPS, security modes become:
+- **Normal mode**: HTTPS accessible, password + Face ID required
+- **Restricted mode**: HTTPS accessible only from allowlisted IPs
+- **Lockdown mode**: All web access disabled, DO Console only
+
+WireGuard remains available as an optional extra for when user has a
+device that supports it.
+**Logged in**: DEC-014, DEC-023

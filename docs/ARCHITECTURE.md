@@ -1,7 +1,9 @@
 # Architecture
 
 **Document Status**: Living document — versioned in git
-**Last significant context**: V1 codebase exists, V2 is being planned
+**Last significant context**: V1 codebase exists. User answers revealed
+iPhone-primary, no-local-workstation constraint. V2 redesigned accordingly.
+See DEC-012 through DEC-024 in DECISIONS-LOG.md.
 
 ---
 
@@ -124,86 +126,138 @@ Browser request
 
 ---
 
-## Planned Architecture (V2)
+## Planned Architecture (V2) — Mobile-First Redesign
+
+**Key constraint**: User operates from an iPhone on corporate WiFi.
+No local workstation. No VPN client for daily use. Everything must
+work through standard HTTPS in Safari. See DEC-012 for full context.
 
 ### Network Topology (Target)
 
 ```
 ┌────────────────────────────── Internet ────────────────────────────────┐
 │                                                                        │
-│   User's Browser ──── HTTPS :443 ─────┐                                │
-│   User's Device ───── WireGuard :51820 ┤                                │
+│   iPhone Safari ──── HTTPS :443 ──────┐                                │
+│   (any browser)                        │                                │
 │                                        │                                │
 │              ┌─────────────────────────▼────────────────────────────┐   │
 │              │  DigitalOcean VPC: 10.100.0.0/16                    │   │
 │              │                                                      │   │
-│              │  ┌─── Hub Droplet ───────────────────────────────┐   │   │
-│              │  │                                                │   │   │
-│              │  │  WireGuard (:51820/udp) ─ VPN tunnel          │   │   │
-│              │  │    │                                           │   │   │
-│              │  │  Caddy (:80/:443)                              │   │   │
-│              │  │    │                                           │   │   │
-│              │  │  Authelia (:9091)                              │   │   │
-│              │  │    │ password + WebAuthn/FIDO2                 │   │   │
-│              │  │    │ (+ client cert optional)                  │   │   │
-│              │  │    ▼                                           │   │   │
-│              │  │  Dashboard (:8000)                             │   │   │
-│              │  │    ├── Docker socket                           │   │   │
-│              │  │    ├── DigitalOcean API                        │   │   │
-│              │  │    ├── Config git repo (local)                 │   │   │
-│              │  │    └── Changelog database                      │   │   │
-│              │  │                                                │   │   │
-│              │  │  sandbox_net: 172.30.0.0/24                    │   │   │
-│              │  │    ├── box1–box4 (as before)                   │   │   │
-│              │  │    └── project volumes (persistent)            │   │   │
-│              │  │                                                │   │   │
-│              │  │  WireGuard subnet: 10.200.0.0/24              │   │   │
-│              │  │    └── hub = 10.200.0.1                        │   │   │
-│              │  │    └── your device = 10.200.0.2                │   │   │
-│              │  │                                                │   │   │
-│              │  └────────────────────────────────────────────────┘   │   │
+│              │  ┌─── Hub Droplet (sandbox-hub) ─────────────────┐  │   │
+│              │  │  Region: atl1 (fallback: nyc1)                │  │   │
+│              │  │  Reserved IP: attached (stable DNS)            │  │   │
+│              │  │                                                │  │   │
+│              │  │  Caddy (:80/:443)                              │  │   │
+│              │  │    │ auto-HTTPS, Let's Encrypt                 │  │   │
+│              │  │    ▼                                           │  │   │
+│              │  │  Authelia (:9091)                              │  │   │
+│              │  │    │ password + WebAuthn (iPhone Face ID)      │  │   │
+│              │  │    │ TOTP as emergency backup                  │  │   │
+│              │  │    ▼                                           │  │   │
+│              │  │  Dashboard (:8000)                             │  │   │
+│              │  │    ├── Docker socket                           │  │   │
+│              │  │    ├── DigitalOcean API (server-side)          │  │   │
+│              │  │    ├── Config git repo (local)                 │  │   │
+│              │  │    ├── Budget controller                       │  │   │
+│              │  │    ├── Changelog database                      │  │   │
+│              │  │    └── Security mode controller                │  │   │
+│              │  │                                                │  │   │
+│              │  │  sandbox_net: 172.30.0.0/24                    │  │   │
+│              │  │    ├── box1–box4 (swappable images)            │  │   │
+│              │  │    └── project volumes (persistent)            │  │   │
+│              │  │                                                │  │   │
+│              │  └────────────────────────────────────────────────┘  │   │
+│              │                                                      │   │
+│              │  ┌─── Worker Droplet (on-demand) ────────────────┐  │   │
+│              │  │  Spawned/destroyed by dashboard                │  │   │
+│              │  │  Snapshot before destroy (preserve state)      │  │   │
+│              │  │  Auto-hibernate on inactivity                  │  │   │
+│              │  └────────────────────────────────────────────────┘  │   │
 │              │                                                      │   │
 │              └──────────────────────────────────────────────────────┘   │
+│                                                                        │
+│   Emergency access: DigitalOcean Web Console (browser-based terminal)  │
+│                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### New Components
+### Bootstrap Flow (No Local Tools Required)
 
-#### WireGuard VPN
-- **Purpose**: Private tunnel to hub. Enables VPN-only mode where public
-  HTTP/HTTPS is blocked and all access goes through the tunnel.
-- **Port**: 51820/udp (always open in firewall)
-- **Subnet**: 10.200.0.0/24 (separate from VPC and Docker)
-- **Hub IP**: 10.200.0.1
-- **Client IP**: 10.200.0.2 (your device)
-- **Config managed by**: Dashboard (generate/rotate keys from UI)
-- **Why WireGuard**: Minimal attack surface, fast, one config file, built
-  into Linux kernel. No complex PKI.
+The system deploys from the DigitalOcean web panel — no Terraform, no SSH,
+no CLI tools. Works from iPhone Safari.
 
-#### WebAuthn/FIDO2 (replacing TOTP)
-- **Purpose**: Hardware-bound second factor. The private key never leaves
-  your physical device (YubiKey, phone biometric, laptop fingerprint).
-- **Why not TOTP**: TOTP secret is a shared secret — if someone gets the
-  QR code or seed, they can generate codes from anywhere. WebAuthn
-  private keys are device-bound and use challenge-response. No shared
-  secret to steal.
-- **Authelia support**: Authelia supports WebAuthn natively. Configuration
-  change, not a component replacement.
-- **Fallback**: Keep TOTP as emergency backup, but primary auth is WebAuthn.
+```
+1. DO Panel: Create VPC "sandbox-vpc" (10.100.0.0/16) in atl1
+2. DO Panel: Create droplet in that VPC with cloud-init user data
+3. DO Panel: Assign Reserved IP to the droplet
+4. DO Panel: Verify DNS A record (circlescorner.xyz → Reserved IP)
+5. Wait ~3-5 minutes for cloud-init to complete
+6. Safari: Visit https://circlescorner.xyz
+7. Setup wizard: Enter DO API token, set password, enroll Face ID
+8. Dashboard is live
+```
+
+The cloud-init script in User Data does all the heavy lifting:
+- Installs Docker, git, packages
+- Pulls this repo from GitHub
+- Builds and starts all containers (Caddy, Authelia, Dashboard)
+- Sets up Docker networks
+- Self-configures DNS via DO API (if needed)
+
+### New Components (V2)
+
+#### WebAuthn/FIDO2 via iPhone Face ID
+- **Purpose**: Hardware-bound second factor using iPhone's Secure Enclave
+- **How it works in Safari**: Password prompt → Face ID prompt → done.
+  Looks like a normal website login. No app. No hardware. No code to type.
+- **Why this is strong**: Private key in Secure Enclave, cannot be extracted.
+  Phishing-resistant (domain-bound). Biometric + device possession.
+- **Authelia support**: Native. Configuration change only.
+- **Fallback**: TOTP as emergency backup (e.g., if phone is unavailable)
+- **Sync**: iCloud Keychain syncs passkeys across Apple devices
+
+#### Setup Wizard (first-boot)
+- **Purpose**: Complete system configuration from the browser
+- **When it runs**: First visit to https://circlescorner.xyz after deploy
+- **Collects**: DO API token, admin email, admin password
+- **Generates**: Authelia JWT secret, session secrets
+- **Enrolls**: WebAuthn (Face ID) as primary 2FA
+- **After completion**: Wizard disables itself, normal dashboard loads
+
+#### Security Modes (replaces VPN-only toggle)
+- **Normal**: HTTPS from any IP. Password + Face ID. Daily driver.
+- **Restricted**: HTTPS from allowlisted IPs only. "Add my current IP"
+  button in dashboard. Good for extra security during sensitive work.
+- **Lockdown**: No web access. DO Console only. For when you're done.
+- Controlled from dashboard with confirmation dialogs.
+- See DEC-023 for full design.
+
+#### Budget Controller
+- **Purpose**: Cost visibility and spending limits
+- **Features**: Monthly budget, real-time spend, cost estimator, alerts
+- **Source**: DigitalOcean billing API
+- **Display**: Prominent on dashboard homepage
+- See DEC-018 for full design.
+
+#### Smart Hibernation (snapshot-then-destroy)
+- **Purpose**: "Fall asleep" workers without losing state or paying idle costs
+- **Flow**: Inactivity warning → snapshot → destroy → restore when needed
+- **Cost**: Snapshots at $0.06/GB/month (vs $48/month for running 4vCPU/8GB)
+- See DEC-017 for full design.
 
 #### Config Versioning (on-hub git)
-- **Purpose**: Every config file change on the hub is committed to a local
-  git repository so you can see diffs and revert.
-- **Scope**: `/opt/sandbox/` — compose files, Caddyfile, Authelia config,
-  dashboard settings.
-- **Mechanism**: Dashboard commits to local git before applying changes.
-  Git log becomes the changelog.
-- **Push to remote**: Optional — sync to private GitHub/Gitea repo.
+- **Purpose**: Every config file change committed to local git repo
+- **Scope**: `/opt/sandbox/` — compose files, Caddyfile, Authelia config
+- **Mechanism**: Dashboard commits before/after every change
+- **Push to remote**: Optional GitHub sync
 
-#### Secrets Management
-- See SECURITY-MODEL.md for full design.
-- Summary: Secrets stored encrypted on hub, decrypted at runtime.
-  No secrets in git. VPN tunnel for any remote secret operations.
+#### WireGuard VPN (OPTIONAL — not required for daily use)
+- **Purpose**: Extra security layer for when user has a VPN-capable device
+- **Status**: Optional enhancement (Phase 5+), not a core requirement
+- **Why optional**: Corporate WiFi blocks/flags non-HTTPS traffic.
+  User's daily device is iPhone on corporate networks.
+- **When useful**: From personal device at home, when maximum security desired
+- WireGuard app is available for iOS if the user wants to use it voluntarily
 
 ### Interface Boundaries
 
@@ -286,20 +340,19 @@ To swap Authelia for Authentik: replace Auth Provider + update forward_auth.
 | VPC              | 10.100.0.0/16    | DigitalOcean private inter-droplet |
 | sandbox_net      | 172.30.0.0/24    | Docker bridge for box1–box4        |
 | sandbox_frontend | auto-assigned    | Caddy + Authelia + Dashboard       |
-| WireGuard        | 10.200.0.0/24    | VPN tunnel (hub ↔ your device)     |
+| WireGuard        | 10.200.0.0/24    | Optional VPN tunnel (Phase 5+)     |
 
 ### Port Map
 
-| Port       | Protocol | Source       | Destination | Service     |
-|------------|----------|--------------|-------------|-------------|
-| 22         | TCP      | Internet*    | Hub         | SSH         |
-| 80         | TCP      | Internet*    | Hub → Caddy | HTTP→HTTPS  |
-| 443        | TCP      | Internet*    | Hub → Caddy | HTTPS       |
-| 51820      | UDP      | Internet     | Hub → WG    | WireGuard   |
-| 1–65535    | TCP/UDP  | VPC          | Hub         | VPC traffic |
+| Port       | Protocol | Source       | Destination | Service        |
+|------------|----------|--------------|-------------|----------------|
+| 22         | TCP      | Internet     | Hub         | SSH (breakglass)|
+| 80         | TCP      | Internet*    | Hub → Caddy | HTTP→HTTPS      |
+| 443        | TCP      | Internet*    | Hub → Caddy | HTTPS (primary) |
+| 1–65535    | TCP/UDP  | VPC          | Hub         | VPC traffic     |
 
-*In VPN-only mode, ports 80/443 are blocked from internet. Only
-accessible through WireGuard tunnel.
+*In "Restricted" security mode, ports 80/443 only accept traffic from
+allowlisted IPs. In "Lockdown" mode, only SSH (22) and VPC remain open.
 
-Note: Port 51820 (WireGuard) should always be open even in VPN-only mode,
-otherwise you can't establish the tunnel to access anything else.
+All daily access goes through port 443 (HTTPS) — looks like normal
+website traffic from any network, including corporate WiFi.

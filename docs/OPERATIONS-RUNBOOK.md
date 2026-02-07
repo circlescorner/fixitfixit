@@ -20,102 +20,123 @@ something is broken and you're stressed.
 
 ## First-Time Deployment
 
+**All steps can be done from iPhone Safari.** No local tools required.
+
 ### Prerequisites Checklist
 
 Before you start, you need:
 
 - [ ] DigitalOcean account with billing set up
-- [ ] DigitalOcean API token (create at https://cloud.digitalocean.com/account/api/tokens)
-- [ ] A domain name (you have circlescorner.xyz)
-- [ ] DNS pointed at DigitalOcean nameservers, OR you'll set A records manually
-- [ ] Terraform installed (`terraform --version` should work)
-- [ ] SSH key pair (`ls ~/.ssh/id_ed25519` should show a file)
-- [ ] This repo cloned to your local machine
+- [ ] **CRITICAL**: DO recovery codes saved (Account → Security → save them NOW)
+- [ ] DigitalOcean API token (create at cloud.digitalocean.com → API → Generate New Token)
+- [ ] Domain circlescorner.xyz with nameservers at DigitalOcean
+- [ ] Reserved IP in DigitalOcean (you already have one)
+- [ ] DNS A record: circlescorner.xyz → your Reserved IP
+- [ ] DNS wildcard: *.circlescorner.xyz → your Reserved IP
 
-### Step-by-Step Deployment
+### Step-by-Step Deployment (from iPhone or any browser)
 
+**Step 1: Create VPC** (one time only)
+- DO panel → Networking → VPC → Create VPC
+- Name: `sandbox-vpc`
+- Region: `atl1` (or `nyc1` if atl1 unavailable)
+- IP range: `10.100.0.0/16`
+- Create
+
+**Step 2: Create Hub Droplet**
+- DO panel → Droplets → Create Droplet
+- Region: `atl1` (must match VPC)
+- Image: Ubuntu 24.04 (LTS)
+- Size: Basic → Regular → `s-1vcpu-1gb` ($6/month)
+- VPC Network: select `sandbox-vpc`
+- Authentication: select your SSH key (or create one — DO can generate it)
+- Backups: Enable ($1.20/month)
+- Advanced Options → User Data: check the box, paste the cloud-init script
+  (see `infra/cloud-init.yml` in the repo — copy the raw content)
+- Hostname: `sandbox-hub`
+- Tags: `sandbox`, `hub`
+- Create Droplet
+
+**Step 3: Assign Reserved IP**
+- DO panel → Networking → Reserved IPs
+- Find your Reserved IP → Reassign → select `sandbox-hub`
+- This ensures DNS doesn't need changing when you rebuild
+
+**Step 4: Verify DNS**
+- DO panel → Networking → Domains → circlescorner.xyz
+- Verify A record `@` points to your Reserved IP
+- Verify A record `*` points to your Reserved IP
+- If these don't exist, create them
+
+**Step 5: Wait for cloud-init (~3-5 minutes)**
+- The hub is installing Docker, pulling the repo, building containers
+- To check progress: DO panel → Droplets → sandbox-hub → Console
+  ```
+  tail -f /var/log/cloud-init-output.log
+  ```
+- When you see "ready" in the output, it's done
+- Or just wait 5 minutes and try the next step
+
+**Step 6: Complete initial setup via DO Console**
+(Until the setup wizard is built — see Phase 1b in EVOLUTION-PLAN.md)
+
+In the DO Console terminal:
 ```bash
-# 1. Copy the example config
-cp terraform/terraform.tfvars.example terraform/terraform.tfvars
+# Generate your password hash
+docker run --rm authelia/authelia:latest \
+  authelia crypto hash generate argon2 --password 'YourSecurePassword'
+# Copy the output hash (starts with $argon2id$)
 
-# 2. Generate secrets
-# JWT secret for Authelia:
+# Edit the users file
+nano /opt/sandbox/authelia/users.yml
+# Replace the CHANGE_ME line with your hash
+# Save: Ctrl+X, Y, Enter
+
+# Generate a JWT secret
 openssl rand -hex 32
 # Copy the output
 
-# 3. Edit terraform.tfvars
-# Fill in these values:
-#   do_token          = "your-digitalocean-api-token"
-#   domain            = "circlescorner.xyz"
-#   admin_email       = "your-email@example.com"
-#   authelia_jwt_secret = "the-hex-string-from-step-2"
-#   manage_dns        = true  (if using DO DNS)
+# Edit Authelia config
+nano /opt/sandbox/authelia/configuration.yml
+# Find the session.secret line and set it to the hex string
+# Save: Ctrl+X, Y, Enter
 
-# 4. Run setup
-./scripts/setup.sh
-# This checks prerequisites, generates SSH key if needed, runs terraform init
+# Set your DO token and domain in the compose file
+nano /opt/sandbox/docker-compose.yml
+# Replace ${do_token} with your actual DO API token
+# Replace ${domain} with circlescorner.xyz
+# Replace ${vpc_subnet} with 10.100.0.0/16
+# Save: Ctrl+X, Y, Enter
 
-# 5. Review what Terraform will create
-cd terraform
-terraform plan
-# You should see: 1 VPC, 1 SSH key, 1 firewall, 1 droplet, optionally DNS records
-# If it looks right:
+# Also update the Caddyfile
+nano /opt/sandbox/caddy/Caddyfile
+# Replace ${domain} with circlescorner.xyz
+# Replace ${admin_email} with your email
+# Save
 
-# 6. Apply
-terraform apply
-# Type "yes" when prompted
-# Wait for it to complete (usually 1-2 minutes)
-# Note the outputs: hub_ip, dashboard_url
-
-# 7. Wait for cloud-init to finish (the hub is installing packages)
-# Check by SSHing in:
-ssh root@<hub_ip>
-# If you get "Connection refused", wait 30 seconds and try again
-# Once in:
-cat /opt/sandbox/status
-# When it says "ready", cloud-init is done
-
-# 8. Set your Authelia password
-# Back on your local machine:
-./scripts/set-password.sh 'YourSecurePassword'
-# This outputs an argon2id hash. Copy it.
-
-# 9. Update the user database on the hub
-ssh root@<hub_ip>
-nano /opt/sandbox/authelia/users.yml
-# Replace the CHANGE_ME_GENERATE_A_HASH line with your hash
-# The line should look like:
-#   password: "$argon2id$v=19$m=65536,t=3,p=4$<your-actual-hash>"
-# Save and exit (Ctrl+X, Y, Enter)
-
-# 10. Restart Authelia to pick up the new password
-cd /opt/sandbox && docker compose restart authelia
-
-# 11. Open your browser
-# Go to https://circlescorner.xyz
-# Log in: username "admin", your password
-# You'll be prompted to set up TOTP (scan QR code with authenticator app)
-# Enter the 6-digit code
-
-# 12. Verify the dashboard loads
-# You should see the container management interface
-
-# 13. VERIFY BREAKGLASS (do this now, not later)
-# Open a new terminal:
-ssh root@<hub_ip>
-# If this works, your breakglass is confirmed.
-# Also test the DO web console:
-# Browser → cloud.digitalocean.com → Droplets → sandbox-hub → Console
+# Restart everything
+cd /opt/sandbox && docker compose down && docker compose up -d
 ```
+
+**Step 7: Visit https://circlescorner.xyz**
+- Log in: username `admin`, your password
+- Set up TOTP when prompted (scan QR code with your authenticator app)
+- You should see the dashboard
+
+**Step 8: Verify breakglass**
+- Open a new DO Console session
+- Verify you get a root shell
+- This is your emergency access
 
 ### Post-Deployment Checklist
 
 - [ ] Dashboard loads at https://circlescorner.xyz
-- [ ] TOTP enrollment completed
-- [ ] SSH access confirmed from your machine
-- [ ] DO web console access confirmed
-- [ ] SSH private key backed up to second location
-- [ ] terraform.tfvars is NOT in git (check: `git status` should not show it)
+- [ ] Login works (password + TOTP code)
+- [ ] DO Console gives root shell (breakglass works)
+- [ ] DO recovery codes saved (at least 2 locations)
+- [ ] Containers visible on dashboard (box1-box4)
+- [ ] Reserved IP attached to hub
+- [ ] DNS resolves correctly
 
 ---
 
